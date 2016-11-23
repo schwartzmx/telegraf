@@ -58,6 +58,14 @@ func initQueries(r *Redshift) {
 	queries["ColumnsNotCompressed"] = Query{Script: rsColumnsNotCompressed}
 	queries["TableInfo"] = Query{Script: rsTableInfo}
 	queries["QueryScanNoSort"] = Query{Script: queryFmt(rsQueryScanNoSort, r.IntervalSeconds)}
+	queries["TotalWLMQueueTime"] = Query{Script: queryFmt(rsTotalWLMQueueTime, r.IntervalSeconds)}
+	queries["TotalDiskBasedQueries"] = Query{Script: queryFmt(rsTotalDiskBasedQueries, r.IntervalSeconds)}
+	queries["AvgCommitQueue"] = Query{Script: queryFmt(rsAvgCommitQueue, r.IntervalSeconds)}
+	queries["TotalAlerts"] = Query{Script: queryFmt(rsTotalAlerts, r.IntervalSeconds)}
+	queries["AvgQueryTime"] = Query{Script: queryFmt(rsAvgQueryTime, r.IntervalSeconds)}
+	queries["TotalPackets"] = Query{Script: queryFmt(rsTotalPackets, r.IntervalSeconds)}
+	queries["QueriesTraffic"] = Query{Script: queryFmt(rsQueriesTraffic, r.IntervalSeconds)}
+	queries["DbConnections"] = Query{Script: rsDbConnections}
 }
 
 func queryFmt(query string, interval int) string {
@@ -155,16 +163,16 @@ func init() {
 
 // queries
 var rsColumnsNotCompressed = `
-SELECT
+select
     count(a.attname) as "Columns Not Compressed"
-FROM pg_namespace n, pg_class c, pg_attribute a  
-WHERE n.oid = c.relnamespace 
-AND c.oid = a.attrelid 
-AND a.attnum > 0 
-AND NOT a.attisdropped 
+from pg_namespace n, pg_class c, pg_attribute a  
+where n.oid = c.relnamespace 
+and c.oid = a.attrelid 
+and a.attnum > 0 
+and NOT a.attisdropped 
 and n.nspname NOT IN ('information_schema','pg_catalog','pg_toast') 
-AND format_encoding(a.attencodingtype::integer) = 'none' 
-AND c.relkind='r' AND a.attsortkeyord != 1;
+and format_encoding(a.attencodingtype::integer) = 'none' 
+and c.relkind='r' and a.attsortkeyord != 1;
 `
 
 var rsTableInfo = `
@@ -218,12 +226,75 @@ select
 `
 
 var rsQueryScanNoSort = `
-SELECT sum(nvl(s.num_qs,0)) as "Query Scans No Sort"
-FROM svv_table_info t 
-LEFT JOIN (
-	SELECT tbl, COUNT(distinct query) num_qs 
-	FROM stl_scan s 
-	WHERE s.userid > 1 AND starttime >= GETDATE() - INTERVAL '%d seconds' 
-	GROUP BY tbl) s 
-ON s.tbl = t.table_id WHERE t.sortkey1 IS NULL
+select sum(nvl(s.num_qs,0)) as "Query Scans No Sort"
+from svv_table_info t 
+left join (
+	select tbl, COUNT(distinct query) num_qs 
+	from stl_scan s 
+	where s.userid > 1 and starttime >= GETDATE() - INTERVAL '%d seconds' 
+	group by tbl) s 
+on s.tbl = t.table_id 
+where t.sortkey1 IS NULL
+`
+
+var rsTotalWLMQueueTime = `
+select SUM(w.total_queue_time) / 1000000.0 as "Total WLM Queue Time"
+from stl_wlm_query w 
+where w.queue_start_time >= GETDATE() - INTERVAL '%d' 
+and w.total_queue_time > 0
+`
+
+var rsTotalDiskBasedQueries = `
+select count(distinct query) as "Total Disk Based Queries"
+from svl_query_report 
+where is_diskbased='t' 
+and (LABEL LIKE 'hash%%' OR LABEL LIKE 'sort%%' OR LABEL LIKE 'aggr%%') 
+and userid > 1 and start_time >= GETDATE() - INTERVAL '%d'
+`
+
+var rsAvgCommitQueue = `
+select avg(datediff(ms,startqueue,startwork)) as "Avg Commit Queue Size"
+from stl_commit_stats  
+where startqueue >= GETDATE() - INTERVAL '%d'
+`
+
+var rsTotalAlerts = `
+select count(distinct l.query) as "Total Alerts"
+from stl_alert_event_log as l 
+where l.userid >1 and l.event_time >= GETDATE() - INTERVAL '%d'
+`
+
+var rsAvgQueryTime = `
+select avg(datediff(ms, starttime, endtime)) as "Avg Query Time ms"
+from stl_query 
+where starttime >= GETDATE() - INTERVAL '%d'
+`
+
+var rsTotalPackets = `
+select sum(packets) as "Total Packets"
+from stl_dist 
+where starttime >= GETDATE() - INTERVAL '%d'
+`
+
+var rsQueriesTraffic = `
+select sum(total) as "Queries Traffic"
+from (
+	select count(query) total 
+	from stl_dist 
+	where starttime >= GETDATE() - INTERVAL '%d' 
+	group by query 
+	having sum(packets) > 1000000
+)
+`
+
+var rsDbConnections = `
+select count(event) as "Database Connections"
+from stl_connection_log 
+where event = 'initiating session' 
+and username != 'rdsdb' 
+and pid not in (
+		select pid 
+		from stl_connection_log 
+		where event = 'disconnecting session'
+	)
 `
