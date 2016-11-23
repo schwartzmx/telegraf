@@ -238,7 +238,7 @@ where t.sortkey1 IS NULL
 `
 
 var rsTotalWLMQueueTime = `
-select SUM(w.total_queue_time) / 1000000.0 as "Total WLM Queue Time"
+select SUM(w.total_queue_time) / 1000000.0 as "Total WLM Queue Time Seconds"
 from stl_wlm_query w 
 where w.queue_start_time >= GETDATE() - INTERVAL '%d' 
 and w.total_queue_time > 0
