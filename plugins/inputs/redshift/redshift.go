@@ -2,20 +2,19 @@ package redshift
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs"
 
 	// postgresql driver initialization
-	"fmt"
-
 	_ "github.com/lib/pq"
 )
 
 // Redshift struct
 type Redshift struct {
-	Servers         []string
+	Address         string
 	ClusterName     string
 	IntervalSeconds int
 }
@@ -32,17 +31,12 @@ type MapQuery map[string]Query
 var queries MapQuery
 
 var sampleConfig = `
-  ## Specify instances to monitor with a list of connection strings.
-  ## All connection parameters are optional.
-  ## By default, the host is localhost, listening on default port, TCP 1433.
-  ##   for Windows, the user is the currently running AD user (SSO).
-  ##   See https://github.com/denisenkom/go-mssqldb for detailed connection
-  ##   parameters.
-  # servers = [
-  #  "Server=192.168.1.10;Port=1433;User Id=<user>;Password=<pw>;app name=telegraf;log=1;",
-  # ]
-  # cluster_name = "research"
-  # interval_seconds = 30
+  ## Specify a Redshift cluster to monitor with an address, or connection string.
+  ## cluster_name is the optional name of the Redshift cluster
+  ## interval_seconds is used for querying windows of metrics
+  # address = "dbname='<db>' port='<p>' user='<user>' password='<pw>' host='<cluster>.<region>.redshift.amazonaws.com'"
+  # cluster_name = "lucid"
+  # interval_seconds = 500
 `
 
 // SampleConfig return the sample configuration
@@ -70,34 +64,28 @@ func queryFmt(query string, interval int) string {
 	return fmt.Sprintf(query, interval)
 }
 
-// Gather collect data from SQL Server
+// Gather collect data from Redshift
 func (r *Redshift) Gather(acc telegraf.Accumulator) error {
 	initQueries(r)
-
-	if len(r.Servers) == 0 {
-		panic("There must be at least 1 server to pull metrics from.")
-	}
 
 	var wg sync.WaitGroup
 	var outerr error
 
-	for _, serv := range r.Servers {
-		for _, query := range queries {
-			wg.Add(1)
-			go func(serv string, query Query) {
-				defer wg.Done()
-				outerr = r.gatherServer(serv, query, acc)
-			}(serv, query)
-		}
+	for _, query := range queries {
+		wg.Add(1)
+		go func(addr string, query Query) {
+			defer wg.Done()
+			outerr = r.gather(addr, query, acc)
+		}(r.Address, query)
 	}
 
 	wg.Wait()
 	return outerr
 }
 
-func (r *Redshift) gatherServer(server string, query Query, acc telegraf.Accumulator) error {
+func (r *Redshift) gather(addr string, query Query, acc telegraf.Accumulator) error {
 	// deferred opening
-	conn, err := sql.Open("postgres", server)
+	conn, err := sql.Open("postgres", addr)
 	if err != nil {
 		return err
 	}
