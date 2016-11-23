@@ -26,18 +26,31 @@ alter user telegraf createuser; -- superuser
   interval_seconds = 500
 ```
 
-
-## Measurement | Fields:
-
-	  
 ## Tags:
 - The (optional) `cluster_name` configuration parameter provided will be tagged to metrics.
 
-	
 
 ## Example Output:
 
 ``` 
 ./telegraf -config telegraf.conf -test 
 * Plugin: redshift, Collection 1
+> redshift,cluster=lucid-research,host=phubuntu evicted\ queries=0i,executing\ queries=1i,queued\ queries=2i,serviced\ queries=95814i 1479930340000000000
+> redshift,cluster=lucid-research,host=phubuntu columns\ not\ compressed=6812i 1479930340000000000
+> redshift,cluster=lucid-research,host=phubuntu analyze\ operations=58i 1479930340000000000
+> redshift,cluster=lucid-research,host=phubuntu copy\ -\ load\ lines\ scanned=2383676i 1479930340000000000
+> redshift,cluster=lucid-research,host=phubuntu avg\ query\ time\ ms=1311i 1479930341000000000
+> redshift,cluster=lucid-research,host=phubuntu currently\ running\ queries=1i 1479930341000000000
+> redshift,cluster=lucid-research,host=phubuntu copy\ -\ load\ errors=0i 1479930341000000000
+> redshift,cluster=lucid-research,host=phubuntu total\ alerts=150i 1479930342000000000
+> redshift,cluster=lucid-research,host=phubuntu total\ packets=14200344i 1479930342000000000
+> redshift,cluster=lucid-research,host=phubuntu avg\ analyze\ duration\ sec=0i 1479930342000000000
+> redshift,cluster=lucid-research,host=phubuntu avg\ commit\ queue\ size=28i 1479930343000000000
+> redshift,cluster=lucid-research,host=phubuntu total\ wlm\ queue\ time\ seconds=822.33806400 1479930343000000000
+> redshift,cluster=lucid-research,host=phubuntu database\ connections=39i 1479930345000000000
+> redshift,cluster=lucid-research,host=phubuntu queries\ traffic=192i 1479930346000000000
+> redshift,cluster=lucid-research,host=phubuntu copy\ -\ unload\ rows=0i 1479930346000000000
+> redshift,cluster=lucid-research,host=phubuntu query\ scans\ no\ sort=755i 1479930355000000000
+> redshift,cluster=lucid-research,host=phubuntu total\ disk\ based\ queries=7i 1479930366000000000
+> redshift,cluster=lucid-research,host=phubuntu max\ skew\ sort\ ratio=100.00,max\ unsorted\ percent=100.00,max\ varchar\ size=65535i,number\ of\ tables\ skew\ sort=34i,number\ of\ tables\ skewed=10i,number\ of\ tables\ stats\ off=480i,tables\ not\ compressed=306i,total\ skew\ sort\ ratio=184.47,total\ table\ rows
 ```

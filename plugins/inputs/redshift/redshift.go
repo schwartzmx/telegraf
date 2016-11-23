@@ -66,6 +66,13 @@ func initQueries(r *Redshift) {
 	queries["TotalPackets"] = Query{Script: queryFmt(rsTotalPackets, r.IntervalSeconds)}
 	queries["QueriesTraffic"] = Query{Script: queryFmt(rsQueriesTraffic, r.IntervalSeconds)}
 	queries["DbConnections"] = Query{Script: rsDbConnections}
+	queries["CopyLoadLineScans"] = Query{Script: queryFmt(rsLoadRowScans, r.IntervalSeconds)}
+	queries["CopyLoadErrors"] = Query{Script: queryFmt(rsLoadErrors, r.IntervalSeconds)}
+	queries["CopyUnloadedRows"] = Query{Script: queryFmt(rsUnloadedRows, r.IntervalSeconds)}
+	queries["AnalyzeOperations"] = Query{Script: queryFmt(rsAnalyzeOps, r.IntervalSeconds)}
+	queries["AnalyzeDuration"] = Query{Script: queryFmt(rsAnalyzeDuration, r.IntervalSeconds)}
+	queries["WLMService"] = Query{Script: rsWLMService}
+	queries["RunningQueries"] = Query{Script: rsCurrentQueries}
 }
 
 func queryFmt(query string, interval int) string {
@@ -234,61 +241,61 @@ left join (
 	where s.userid > 1 and starttime >= GETDATE() - INTERVAL '%d seconds' 
 	group by tbl) s 
 on s.tbl = t.table_id 
-where t.sortkey1 IS NULL
+where t.sortkey1 IS NULL;
 `
 
 var rsTotalWLMQueueTime = `
-select SUM(w.total_queue_time) / 1000000.0 as "Total WLM Queue Time Seconds"
+select isnull(SUM(w.total_queue_time) / 1000000.0,0) as "Total WLM Queue Time Seconds"
 from stl_wlm_query w 
-where w.queue_start_time >= GETDATE() - INTERVAL '%d' 
-and w.total_queue_time > 0
+where w.queue_start_time >= GETDATE() - INTERVAL '%d seconds' 
+and w.total_queue_time > 0;
 `
 
 var rsTotalDiskBasedQueries = `
-select count(distinct query) as "Total Disk Based Queries"
+select isnull(count(distinct query),0) as "Total Disk Based Queries"
 from svl_query_report 
 where is_diskbased='t' 
 and (LABEL LIKE 'hash%%' OR LABEL LIKE 'sort%%' OR LABEL LIKE 'aggr%%') 
-and userid > 1 and start_time >= GETDATE() - INTERVAL '%d'
+and userid > 1 and start_time >= GETDATE() - INTERVAL '%d seconds';
 `
 
 var rsAvgCommitQueue = `
-select avg(datediff(ms,startqueue,startwork)) as "Avg Commit Queue Size"
+select isnull(avg(datediff(ms,startqueue,startwork)),0) as "Avg Commit Queue Size"
 from stl_commit_stats  
-where startqueue >= GETDATE() - INTERVAL '%d'
+where startqueue >= GETDATE() - INTERVAL '%d seconds';
 `
 
 var rsTotalAlerts = `
-select count(distinct l.query) as "Total Alerts"
+select isnull(count(distinct l.query),0) as "Total Alerts"
 from stl_alert_event_log as l 
-where l.userid >1 and l.event_time >= GETDATE() - INTERVAL '%d'
+where l.userid >1 and l.event_time >= GETDATE() - INTERVAL '%d seconds';
 `
 
 var rsAvgQueryTime = `
-select avg(datediff(ms, starttime, endtime)) as "Avg Query Time ms"
+select isnull(avg(datediff(ms, starttime, endtime)),0) as "Avg Query Time ms"
 from stl_query 
-where starttime >= GETDATE() - INTERVAL '%d'
+where starttime >= GETDATE() - INTERVAL '%d seconds';
 `
 
 var rsTotalPackets = `
-select sum(packets) as "Total Packets"
+select isnull(sum(packets),0) as "Total Packets"
 from stl_dist 
-where starttime >= GETDATE() - INTERVAL '%d'
+where starttime >= GETDATE() - INTERVAL '%d seconds';
 `
 
 var rsQueriesTraffic = `
-select sum(total) as "Queries Traffic"
+select isnull(sum(total),0) as "Queries Traffic"
 from (
 	select count(query) total 
 	from stl_dist 
-	where starttime >= GETDATE() - INTERVAL '%d' 
+	where starttime >= GETDATE() - INTERVAL '%d seconds' 
 	group by query 
 	having sum(packets) > 1000000
-)
+);
 `
 
 var rsDbConnections = `
-select count(event) as "Database Connections"
+select isnull(count(event),0) as "Database Connections"
 from stl_connection_log 
 where event = 'initiating session' 
 and username != 'rdsdb' 
@@ -296,5 +303,52 @@ and pid not in (
 		select pid 
 		from stl_connection_log 
 		where event = 'disconnecting session'
-	)
+	);
+`
+
+var rsLoadRowScans = `
+select isnull(sum(lines_scanned),0) as "COPY - Load Lines Scanned"
+from stl_load_commits
+where curtime >= GETDATE() - INTERVAL '%d seconds';
+`
+
+var rsLoadErrors = `
+select isnull(count(1),0) as "COPY - Load Errors"
+from stl_load_errors
+where starttime >= GETDATE() - INTERVAL '%d seconds';
+`
+
+var rsUnloadedRows = `
+select isnull(sum(line_count),0) as "COPY - UnLoad Rows"
+from stl_unload_log
+where start_time >= GETDATE() - INTERVAL '%d seconds';
+`
+
+var rsAnalyzeOps = `
+select isnull(count(1),0) as "Analyze Operations"
+from stl_analyze
+where starttime >= GETDATE() - INTERVAL '%d seconds';
+`
+
+var rsAnalyzeDuration = `
+select isnull(avg(datediff(second, starttime, endtime)),0) as "Avg Analyze Duration sec"
+from stl_analyze
+where starttime >= GETDATE() - INTERVAL '%d seconds'
+and endtime is not null;
+`
+
+var rsWLMService = `
+select sum(num_queued_queries) as "Queued Queries"
+	, sum(num_executing_queries) as "Executing Queries"
+	, sum(num_serviced_queries) as "Serviced Queries"
+	, sum(num_evicted_queries) as "Evicted Queries"
+from stv_wlm_service_class_state s
+join stv_wlm_service_class_config c 
+on s.service_class = c.service_class and c.service_class > 4;
+`
+
+var rsCurrentQueries = `
+select isnull(count(1),0) as "Currently Running Queries" 
+from stv_inflight 
+where pid != pg_backend_pid();
 `
