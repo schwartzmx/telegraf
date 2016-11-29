@@ -22,6 +22,7 @@ type Redshift struct {
 // Query struct
 type Query struct {
 	Script         string
+	Measurement    string
 	OrderedColumns []string
 }
 
@@ -55,24 +56,25 @@ type scanner interface {
 
 func initQueries(r *Redshift) {
 	queries = make(MapQuery)
-	queries["ColumnsNotCompressed"] = Query{Script: rsColumnsNotCompressed}
-	queries["TableInfo"] = Query{Script: rsTableInfo}
-	queries["QueryScanNoSort"] = Query{Script: queryFmt(rsQueryScanNoSort, r.IntervalSeconds)}
-	queries["TotalWLMQueueTime"] = Query{Script: queryFmt(rsTotalWLMQueueTime, r.IntervalSeconds)}
-	queries["TotalDiskBasedQueries"] = Query{Script: queryFmt(rsTotalDiskBasedQueries, r.IntervalSeconds)}
-	queries["AvgCommitQueue"] = Query{Script: queryFmt(rsAvgCommitQueue, r.IntervalSeconds)}
-	queries["TotalAlerts"] = Query{Script: queryFmt(rsTotalAlerts, r.IntervalSeconds)}
-	queries["AvgQueryTime"] = Query{Script: queryFmt(rsAvgQueryTime, r.IntervalSeconds)}
-	queries["TotalPackets"] = Query{Script: queryFmt(rsTotalPackets, r.IntervalSeconds)}
-	queries["QueriesTraffic"] = Query{Script: queryFmt(rsQueriesTraffic, r.IntervalSeconds)}
-	queries["DbConnections"] = Query{Script: rsDbConnections}
-	queries["CopyLoadLineScans"] = Query{Script: queryFmt(rsLoadRowScans, r.IntervalSeconds)}
-	queries["CopyLoadErrors"] = Query{Script: queryFmt(rsLoadErrors, r.IntervalSeconds)}
-	queries["CopyUnloadedRows"] = Query{Script: queryFmt(rsUnloadedRows, r.IntervalSeconds)}
-	queries["AnalyzeOperations"] = Query{Script: queryFmt(rsAnalyzeOps, r.IntervalSeconds)}
-	queries["AnalyzeDuration"] = Query{Script: queryFmt(rsAnalyzeDuration, r.IntervalSeconds)}
-	queries["WLMService"] = Query{Script: rsWLMService}
-	queries["RunningQueries"] = Query{Script: rsCurrentQueries}
+	queries["ColumnsNotCompressed"] = Query{Script: rsColumnsNotCompressed, Measurement: "column"}
+	queries["TableInfo"] = Query{Script: rsTableInfo, Measurement: "table"}
+	queries["QueryScanNoSort"] = Query{Script: queryFmt(rsQueryScanNoSort, r.IntervalSeconds), Measurement: "query"}
+	queries["TotalWLMQueueTime"] = Query{Script: queryFmt(rsTotalWLMQueueTime, r.IntervalSeconds), Measurement: "wlm"}
+	queries["TotalDiskBasedQueries"] = Query{Script: queryFmt(rsTotalDiskBasedQueries, r.IntervalSeconds), Measurement: "query"}
+	queries["AvgCommitQueue"] = Query{Script: queryFmt(rsAvgCommitQueue, r.IntervalSeconds), Measurement: "operation"}
+	queries["TotalAlerts"] = Query{Script: queryFmt(rsTotalAlerts, r.IntervalSeconds), Measurement: "operation"}
+	queries["AvgQueryTime"] = Query{Script: queryFmt(rsAvgQueryTime, r.IntervalSeconds), Measurement: "query"}
+	queries["TotalPackets"] = Query{Script: queryFmt(rsTotalPackets, r.IntervalSeconds), Measurement: "network"}
+	queries["QueriesTraffic"] = Query{Script: queryFmt(rsQueriesTraffic, r.IntervalSeconds), Measurement: "network"}
+	queries["DbConnections"] = Query{Script: rsDbConnections, Measurement: "operation"}
+	queries["CopyLoadLineScans"] = Query{Script: queryFmt(rsLoadRowScans, r.IntervalSeconds), Measurement: "operation"}
+	queries["CopyLoadErrors"] = Query{Script: queryFmt(rsLoadErrors, r.IntervalSeconds), Measurement: "operation"}
+	queries["CopyUnloadedRows"] = Query{Script: queryFmt(rsUnloadedRows, r.IntervalSeconds), Measurement: "operation"}
+	queries["AnalyzeOperations"] = Query{Script: queryFmt(rsAnalyzeOps, r.IntervalSeconds), Measurement: "operation"}
+	queries["AnalyzeDuration"] = Query{Script: queryFmt(rsAnalyzeDuration, r.IntervalSeconds), Measurement: "operation"}
+	queries["WLMService"] = Query{Script: rsWLMService, Measurement: "wlm"}
+	queries["RunningQueries"] = Query{Script: rsCurrentQueries, Measurement: "query"}
+	queries["DiskPctUsage"] = Query{Script: rsDiskPctUsed, Measurement: "disk"}
 }
 
 func queryFmt(query string, interval int) string {
@@ -158,7 +160,7 @@ func (r *Redshift) accRow(query Query, acc telegraf.Accumulator, row scanner) er
 	for col, val := range columnMap {
 		fields[col] = *val
 	}
-	acc.AddFields("redshift", fields, tags)
+	acc.AddFields(query.Measurement, fields, tags)
 	return nil
 }
 
@@ -182,54 +184,27 @@ and format_encoding(a.attencodingtype::integer) = 'none'
 and c.relkind='r' and a.attsortkeyord != 1;
 `
 
+var rsDiskPctUsed = `
+select sum(used)::float / sum(capacity) as "Disk Percent Full"
+from stv_partitions;
+`
+
 var rsTableInfo = `
 select
-	"schema" || '.' || "table" as tablename, encoded, max_varchar, unsorted, stats_off, tbl_rows, skew_sortkey1, skew_rows 
-into temp table tableinfo
-from svv_table_info;
-
-select
-	(
-		select sum(case when encoded = 'N' then 1 else 0 end)
-		from tableinfo
-	) as "Tables Not Compressed",
-	(
-		select max(case when isnull(skew_rows,0) >= isnull(skew_sortkey1,0)
+	sum(case when encoded = 'N' then 1 else 0 end) as "Tables Not Compressed",
+	max(case when isnull(skew_rows,0) >= isnull(skew_sortkey1,0)
 				then isnull(skew_rows,0)
 				else isnull(skew_sortkey1,0)
 				end
-				)
-		from tableinfo
 	) as "Max Skew Sort Ratio" ,
-	(
-		select sum(isnull(skew_rows,0)) + sum(isnull(skew_sortkey1,0))
-		from tableinfo
-	) as "Total Skew Sort Ratio" ,
-	(
-		select sum(case when skew_rows is not null then 1 else 0 end) + sum(case when skew_sortkey1 is not null then 1 else 0 end)
-		from tableinfo
-	) as "Number of Tables Skew Sort" ,
-	(
-		select sum(case when isnull(skew_rows, 0) > 0 then 1 else 0 end)
-		from tableinfo
-	) as "Number of Tables Skewed",
-	(
-		select sum(case when stats_off is not null then 1 else 0 end)
-		from tableinfo
-	) as "Number of Tables Stats Off",
-	(
-		select max(isnull(max_varchar,0))
-		from tableinfo
-	) as "Max VarChar Size",
-	(
-		select max(isnull(unsorted,0))
-		from tableinfo
-	) as "Max Unsorted Percent",
-	(
-		select sum(isnull(tbl_rows,0))
-		from tableinfo
-	) as "Total Table Rows";
-
+	sum(isnull(skew_rows,0)) + sum(isnull(skew_sortkey1,0)) as "Total Skew Sort Ratio" ,
+	sum(case when skew_rows is not null then 1 else 0 end) + sum(case when skew_sortkey1 is not null then 1 else 0 end) as "Number of Tables Skew Sort" ,
+	sum(case when isnull(skew_rows, 0) > 0 then 1 else 0 end) as "Number of Tables Skewed",
+	sum(case when stats_off is not null then 1 else 0 end) as "Number of Tables Stats Off",
+	max(isnull(max_varchar,0)) as "Max VarChar Size",
+ 	max(isnull(unsorted,0)) as "Max Unsorted Percent",
+	sum(isnull(tbl_rows,0)) as "Total Table Rows"
+from svv_table_info;
 `
 
 var rsQueryScanNoSort = `
